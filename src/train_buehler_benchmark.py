@@ -1,0 +1,85 @@
+"""
+Buehler et al. (2019) §3.2 benchmark — GBM + European call + ES_α loss.
+
+Trains one network per α ∈ {0.5, 0.75, 0.95, 0.99} and saves each to results/.
+
+Run:
+    python src/train_buehler_benchmark.py
+"""
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import torch
+import torch.nn as nn
+
+from src.gbm_simulator import GBMParams, simulate
+from src.hedging.hedge_network import HedgeNet
+from src.hedging.loss import CVaRLoss
+from src.hedging.trainer import train
+
+# ---------------------------------------------------------------------------
+# Parameters (Buehler §3.2)
+# ---------------------------------------------------------------------------
+S0    = 100.0
+K     = 100.0
+mu    = 0.0          # risk-neutral drift
+sigma = 0.2
+N     = 30
+dt    = 1 / 365
+T     = N * dt
+
+M_train    = 100_000
+n_epochs   = 300
+batch_size = 10_000
+lr         = 5e-3
+
+ALPHAS = [0.5, 0.75, 0.95, 0.99]
+
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
+RESULTS_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Simulate once, reuse for all α
+# ---------------------------------------------------------------------------
+print("Simulating GBM paths ...")
+params = GBMParams(S0=S0, mu=mu, sigma=sigma, T=T, N=N, M=M_train)
+paths  = simulate(params, seed=42)
+print(f"  paths: {paths.shape}\n")
+
+# ---------------------------------------------------------------------------
+# Train one network per α
+# ---------------------------------------------------------------------------
+for alpha in ALPHAS:
+    print(f"{'='*50}")
+    print(f"Training ES_{alpha} network ...")
+
+    network = HedgeNet(N=N, width=20)
+    loss_fn = CVaRLoss(K=K, alpha=alpha)
+
+    # p0 init: α-quantile of naive loss on first batch (no hedge)
+    with torch.no_grad():
+        C_T_sample = torch.clamp(paths[:1000, -1] - K, min=0.0)
+        p0_init = float(C_T_sample.quantile(alpha))
+    print(f"  p0 init (VaR_{alpha} of unhedged loss): {p0_init:.4f}")
+
+    losses, p0 = train(
+        network,
+        paths,
+        loss_fn,
+        p0_init   = p0_init,
+        n_epochs  = n_epochs,
+        batch_size= batch_size,
+        lr        = lr,
+        log_every = 100,
+    )
+
+    tag = str(alpha).replace(".", "")
+    torch.save(network.cpu().state_dict(),
+               RESULTS_DIR / f"buehler_ES{tag}_network.pt")
+    torch.save({"losses": losses, "p0": p0.item(), "alpha": alpha},
+               RESULTS_DIR / f"buehler_ES{tag}_log.pt")
+    print(f"  Final p0 = {p0.item():.4f}  → saved as buehler_ES{tag}_*\n")
+
+print("All done.")
