@@ -1,0 +1,19 @@
+{
+  "S0": 100.0,
+  "v0": 0.04,
+  "kappa": 1.0,
+  "theta": 0.04,
+  "xi": 2.0,
+  "rho": -0.7,
+  "T": 0.0821917808219178,
+  "N": 30,
+  "M": 100000,
+  "shape": [
+    100000,
+    31
+  ],
+  "dtype": "torch.float32",
+  "elapsed_s": 0.3641,
+  "seed": 42,
+  "feller_condition_satisfied": false
+}

@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import math
+
 import torch
 import torch.nn as nn
 
@@ -31,7 +33,7 @@ dt    = 1 / 365
 T     = N * dt
 
 M_train    = 100_000
-n_epochs   = 300
+n_epochs   = 400
 batch_size = 10_000
 lr         = 5e-3
 
@@ -58,18 +60,22 @@ for alpha in ALPHAS:
     network = HedgeNet(N=N, width=20)
     loss_fn = CVaRLoss(K=K, alpha=alpha)
 
-    # p0 init: α-quantile of naive loss on first batch (no hedge)
-    with torch.no_grad():
-        C_T_sample = torch.clamp(paths[:1000, -1] - K, min=0.0)
-        p0_init = float(C_T_sample.quantile(alpha))
-    print(f"  p0 init (VaR_{alpha} of unhedged loss): {p0_init:.4f}")
+    # p0 init: Black-Scholes call price — same for all alpha, matches reference.
+    # Using VaR_α(C_T) of the unhedged payoff is wrong for high alpha: it gives
+    # p0 >> realistic hedging error, zeroing the gradient to the network for
+    # hundreds of epochs while p0 slowly descends to the right ballpark.
+    _d1 = (math.log(S0 / K) + 0.5 * sigma**2 * T) / (sigma * T**0.5)
+    _d2 = _d1 - sigma * T**0.5
+    _N  = torch.distributions.Normal(0, 1).cdf
+    p0_init = float(S0 * _N(torch.tensor(_d1)) - K * _N(torch.tensor(_d2)))
+    print(f"  p0 init (BS price, all alpha): {p0_init:.4f}")
 
     losses, p0 = train(
         network,
         paths,
         loss_fn,
         p0_init   = p0_init,
-        n_epochs  = n_epochs,
+        n_epochs  = n_epochs if alpha in (0.5, 0.75) else 1000,
         batch_size= batch_size,
         lr        = lr,
         log_every = 100,

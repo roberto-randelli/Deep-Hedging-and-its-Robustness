@@ -59,7 +59,14 @@ params = HestonParams(
 S, V, VarPrice = simulate(params, seed=42)
 print(f"  S:        {S.shape}")
 print(f"  V:        {V.shape}")
-print(f"  VarPrice: {VarPrice.shape}\n")
+print(f"  VarPrice: {VarPrice.shape}")
+
+# Heston call price = E[C_T] from training paths — used as p0 warm start
+# (matches He et al.'s hard-coded 1.69, which is the fair Heston price)
+with torch.no_grad():
+    C_T_all = torch.clamp(S[:, -1] - K, min=0.0)
+    p0_heston = float(C_T_all.mean())
+print(f"  Heston call price (MC): {p0_heston:.4f}\n")
 
 # ---------------------------------------------------------------------------
 # Train one network per α
@@ -71,11 +78,8 @@ for alpha in ALPHAS:
     network = HestonHedgeNet(N=N, width=20)
     loss_fn = HestonCVaRLoss(K=K, alpha=alpha)
 
-    # p0 init: α-quantile of unhedged terminal loss (no hedge)
-    with torch.no_grad():
-        C_T_sample = torch.clamp(S[:1000, -1] - K, min=0.0)
-        p0_init = float(C_T_sample.quantile(alpha))
-    print(f"  p0 init (VaR_{alpha} of unhedged loss): {p0_init:.4f}")
+    p0_init = p0_heston
+    print(f"  p0 init (Heston call price): {p0_init:.4f}")
 
     losses, p0 = train(
         network,
