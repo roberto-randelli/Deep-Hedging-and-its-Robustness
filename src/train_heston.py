@@ -38,9 +38,8 @@ dt    = 1 / 365
 T     = N * dt
 
 M_train    = 100_000
-n_epochs   = 300
 batch_size = 10_000
-lr         = 5e-3
+lr         = 5e-2     # 0.05 — matches Prequel (10× higher than GBM trainer)
 
 ALPHAS = [0.5, 0.75, 0.95, 0.99]
 
@@ -61,6 +60,15 @@ print(f"  S:        {S.shape}")
 print(f"  V:        {V.shape}")
 print(f"  VarPrice: {VarPrice.shape}")
 
+# Scale VarPrice so ΔVarPrice ≈ O(1) — aligns gradient magnitudes for both
+# output channels (δ_S, δ_V).  Raw VarPrice₀ ≈ 0.003, so ΔVarPrice ≈ 1e-4
+# while ΔS ≈ 1; without scaling δ_V receives ~1000× smaller gradients and
+# never learns.  Scaling is consistent with evaluation (same factor applied
+# there), so the economic P&L (δ_V_scaled · ΔVP_scaled) is unchanged.
+vp_scale = 1.0 / float(VarPrice[:, 0].mean())
+VarPrice = VarPrice * vp_scale
+print(f"  VarPrice scale factor:  {vp_scale:.2f}")
+
 # Heston call price = E[C_T] from training paths — used as p0 warm start
 # (matches He et al.'s hard-coded 1.69, which is the fair Heston price)
 with torch.no_grad():
@@ -75,11 +83,16 @@ for alpha in ALPHAS:
     print(f"{'='*50}")
     print(f"Training ES_{alpha} network (Heston) ...")
 
+    # Higher-alpha CVaR has sparser gradients (only top (1-α) paths contribute),
+    # so more epochs are needed for convergence.
+    n_epochs = 700 if alpha in (0.5, 0.75) else 1500
+
     network = HestonHedgeNet(N=N, width=20)
     loss_fn = HestonCVaRLoss(K=K, alpha=alpha)
 
     p0_init = p0_heston
     print(f"  p0 init (Heston call price): {p0_init:.4f}")
+    print(f"  n_epochs: {n_epochs}")
 
     losses, p0 = train(
         network,
@@ -97,7 +110,8 @@ for alpha in ALPHAS:
     tag = str(alpha).replace(".", "")
     torch.save(network.cpu().state_dict(),
                RESULTS_DIR / f"heston_ES{tag}_network.pt")
-    torch.save({"losses": losses, "p0": p0.item(), "alpha": alpha, "params": vars(params)},
+    torch.save({"losses": losses, "p0": p0.item(), "alpha": alpha, "params": vars(params),
+                "vp_scale": vp_scale},
                RESULTS_DIR / f"heston_ES{tag}_log.pt")
     print(f"  Final p0 = {p0.item():.4f}  → saved as heston_ES{tag}_*\n")
 

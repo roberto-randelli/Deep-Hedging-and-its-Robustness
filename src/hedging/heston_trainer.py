@@ -79,10 +79,12 @@ def train(
     )
 
     def _lr_lambda(epoch: int) -> float:
-        if epoch < 100:  return 1.0
-        if epoch < 200:  return 0.1
-        if epoch < 250:  return 0.01
-        return 0.001
+        # Matches Prequel Heston_train_clean.py schedule; extended for longer runs
+        if epoch < 200:   return 1.0
+        if epoch < 400:   return 0.1
+        if epoch < 600:   return 0.01
+        if epoch < 1000:  return 0.001
+        return 0.0001
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
 
