@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
-from src.gbm_simulator import GBMParams, simulate
+from src.gbm_simulator import GBMParams, GBMPathGenerator
 from src.hedging.hedge_network import HedgeNet
 from src.hedging.loss import EntropicOCELoss
 from src.hedging.trainer import train
@@ -42,7 +42,7 @@ RESULTS_DIR.mkdir(exist_ok=True)
 # ---------------------------------------------------------------------------
 print("Simulating GBM paths ...")
 params = GBMParams(S0=S0, mu=mu, sigma=sigma, T=T, N=N, M=M_train)
-paths  = simulate(params, seed=42)          # (M, N+1) on CPU
+paths  = GBMPathGenerator(params)(seed=42)  # (M, N+1) on CPU
 print(f"  paths: {paths.shape}")
 
 # ---------------------------------------------------------------------------

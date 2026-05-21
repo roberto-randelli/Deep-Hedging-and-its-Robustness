@@ -90,24 +90,6 @@ class EntropicOCELoss(nn.Module):
 # ---------------------------------------------------------------------------
 
 class CVaRLoss(nn.Module):
-    """
-    Expected Shortfall (CVaR) loss — Buehler et al. (2019), §3.2 / Eq. (3.1).
-
-    Uses the Rockafellar-Uryasev dual representation (differentiable):
-
-        ES_α(X) = min_z { z + E[ max(X − z, 0) ] / (1 − α) }
-
-    where X = C_T − PnL  (loss, positive = bad) and z = p0 is the jointly-
-    optimised VaR threshold (same role as p0 in EntropicOCELoss).
-
-    At convergence:  p0* = VaR_α(C_T − PnL)
-                     loss* = ES_α(C_T − PnL)
-
-    Args:
-        K:     Strike price.
-        alpha: Confidence level α ∈ (0, 1). Higher = more tail-focused.
-    """
-
     def __init__(self, K: float, alpha: float = 0.5) -> None:
         super().__init__()
         self.K = K
@@ -118,14 +100,18 @@ class CVaRLoss(nn.Module):
 
     def forward(
         self,
-        holding: torch.Tensor,   # (batch, N)   — hedge ratios
-        price: torch.Tensor,     # (batch, N+1) — stock prices
-        p0: torch.Tensor,        # scalar nn.Parameter — VaR threshold / price proxy
+        holding: torch.Tensor,     # (batch, N)
+        price: torch.Tensor,       # (batch, N+1)
+        capital: torch.Tensor,     # scalar or (1,) fixed/learned initial premium
+        z: torch.Tensor,           # scalar nn.Parameter: CVaR threshold
     ) -> torch.Tensor:
-        PnL = (holding * (price[:, 1:] - price[:, :-1])).sum(dim=1)
-        C_T = self.terminal_payoff(price[:, -1])
-        X   = C_T - PnL                              # loss per path
-        return torch.clamp(X - p0, min=0.0).mean() / (1.0 - self.alpha) + p0
+        trading_gains = (holding * (price[:, 1:] - price[:, :-1])).sum(dim=1)
+        payoff = self.terminal_payoff(price[:, -1])
+
+        # Loss = payoff - capital - trading gains
+        loss = payoff - capital - trading_gains
+
+        return torch.relu(loss - z).mean() / (1.0 - self.alpha) + z
 
 
 # ---------------------------------------------------------------------------

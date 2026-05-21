@@ -16,7 +16,7 @@ import math
 import torch
 import torch.nn as nn
 
-from src.gbm_simulator import GBMParams, simulate
+from src.gbm_simulator import GBMParams, GBMPathGenerator
 from src.hedging.hedge_network import HedgeNet
 from src.hedging.loss import CVaRLoss
 from src.hedging.trainer import train
@@ -47,7 +47,7 @@ RESULTS_DIR.mkdir(exist_ok=True)
 # ---------------------------------------------------------------------------
 print("Simulating GBM paths ...")
 params = GBMParams(S0=S0, mu=mu, sigma=sigma, T=T, N=N, M=M_train)
-paths  = simulate(params, seed=42)
+paths  = GBMPathGenerator(params)(seed=42)
 print(f"  paths: {paths.shape}\n")
 
 # ---------------------------------------------------------------------------
@@ -60,21 +60,21 @@ for alpha in ALPHAS:
     network = HedgeNet(N=N, width=20)
     loss_fn = CVaRLoss(K=K, alpha=alpha)
 
-    # p0 init: Black-Scholes call price — same for all alpha, matches reference.
-    # Using VaR_α(C_T) of the unhedged payoff is wrong for high alpha: it gives
-    # p0 >> realistic hedging error, zeroing the gradient to the network for
-    # hundreds of epochs while p0 slowly descends to the right ballpark.
     _d1 = (math.log(S0 / K) + 0.5 * sigma**2 * T) / (sigma * T**0.5)
     _d2 = _d1 - sigma * T**0.5
     _N  = torch.distributions.Normal(0, 1).cdf
     p0_init = float(S0 * _N(torch.tensor(_d1)) - K * _N(torch.tensor(_d2)))
-    print(f"  p0 init (BS price, all alpha): {p0_init:.4f}")
+    print(f"  fixed capital (BS price): {p0_init:.4f}")
 
-    losses, p0 = train(
+    capital = torch.tensor(p0_init, dtype=torch.float32)
+    z_init = 0.0
+
+    losses, z = train(
         network,
         paths,
         loss_fn,
-        p0_init   = p0_init,
+        capital   = p0_init,
+        z_init    = 0.0,
         n_epochs  = n_epochs if alpha in (0.5, 0.75) else 1000,
         batch_size= batch_size,
         lr        = lr,
@@ -83,9 +83,13 @@ for alpha in ALPHAS:
 
     tag = str(alpha).replace(".", "")
     torch.save(network.cpu().state_dict(),
-               RESULTS_DIR / f"buehler_ES{tag}_network.pt")
-    torch.save({"losses": losses, "p0": p0.item(), "alpha": alpha},
-               RESULTS_DIR / f"buehler_ES{tag}_log.pt")
-    print(f"  Final p0 = {p0.item():.4f}  → saved as buehler_ES{tag}_*\n")
+           RESULTS_DIR / f"buehler_ES{tag}_network.pt")
+    torch.save({
+        "losses": losses,
+        "z": z.item(),
+        "capital": p0_init,
+        "alpha": alpha}, RESULTS_DIR / f"buehler_ES{tag}_log.pt")
+
+    print(f"  Final z = {z.item():.4f}  → saved as buehler_ES{tag}_*\n")
 
 print("All done.")
