@@ -55,7 +55,7 @@ params = HestonParams(
     kappa=kappa, theta=theta, xi=xi, rho=rho,
     T=T, N=N, M=M_train,
 )
-S, V, VarPrice = simulate(params, seed=42)
+S, V, VarPrice = simulate(params, seed=19)
 print(f"  S:        {S.shape}")
 print(f"  V:        {V.shape}")
 print(f"  VarPrice: {VarPrice.shape}")
