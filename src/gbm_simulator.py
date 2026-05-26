@@ -215,6 +215,12 @@ class GBMPathGeneratorOOSP(nn.Module):
         return paths.view(-1, self.N + 1)
 
 
+def simulate(params: GBMParams, seed: int | None = None) -> torch.Tensor:
+    """Convenience wrapper: generate params.M paths and return (M, N+1) tensor."""
+    gen = GBMPathGenerator(params)
+    return gen(seed=seed)
+
+
 if __name__ == "__main__":
     params = GBMParams(
         S0=100.0,

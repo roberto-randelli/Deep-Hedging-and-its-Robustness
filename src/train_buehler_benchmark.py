@@ -47,7 +47,7 @@ RESULTS_DIR.mkdir(exist_ok=True)
 # ---------------------------------------------------------------------------
 print("Simulating GBM paths ...")
 params = GBMParams(S0=S0, mu=mu, sigma=sigma, T=T, N=N, M=M_train)
-paths  = GBMPathGenerator(params)(seed=42)
+paths  = GBMPathGenerator(params)(seed=90)
 print(f"  paths: {paths.shape}\n")
 
 # ---------------------------------------------------------------------------
