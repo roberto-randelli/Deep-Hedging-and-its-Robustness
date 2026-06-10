@@ -33,11 +33,13 @@ from torch.distributions import Normal
 class EntropicOCELoss(nn.Module):
     """
     Args:
-        K:      Strike price.
-        sigma:  Volatility (used only for bs_price reference).
-        T:      Maturity.
-        lamb:   Risk-aversion parameter λ > 0.
-        X_max:  If True, clamp hedging error X from below at −10.
+        K:          Strike price.
+        sigma:      Volatility (used only for bs_price reference).
+        T:          Maturity.
+        lamb:       Risk-aversion parameter λ > 0.
+        X_max:      If True, clamp hedging error X from below at x_max_val.
+        x_max_val:  Lower clamp threshold for X (default −10 for GBM/Heston;
+                    use −1 to match He et al. GAD experiments with λ=13).
     """
 
     def __init__(
@@ -47,6 +49,7 @@ class EntropicOCELoss(nn.Module):
         T: float,
         lamb: float = 1.3,
         X_max: bool = True,
+        x_max_val: float = -10.0,
     ) -> None:
         super().__init__()
         self.K = K
@@ -54,6 +57,7 @@ class EntropicOCELoss(nn.Module):
         self.T = T
         self.lamb = lamb
         self.X_max = X_max
+        self.x_max_val = x_max_val
 
     # ------------------------------------------------------------------
     def terminal_payoff(self, S_T: torch.Tensor) -> torch.Tensor:
@@ -81,7 +85,7 @@ class EntropicOCELoss(nn.Module):
         X = PnL - C_T
 
         if self.X_max:
-            X = torch.clamp(X, min=-10.0)
+            X = torch.clamp(X, min=self.x_max_val)
 
         x = X + p0
         return torch.exp(-self.lamb * x).mean() + p0 - (1 + np.log(self.lamb)) / self.lamb

@@ -4,11 +4,11 @@ General Affine Diffusion (GAD) path simulator — Euler-Maruyama scheme.
 Model (Lütkebohmert–Schmidt–Sester 2022, He et al. 2025):
     dS_t = (b0 + b1 * S_t) dt + (a0 + a1 * S_t)^γ dW_t
 
-With γ = 1 (fixed) this becomes a linear-coefficient SDE:
-    dS_t = (b0 + b1 * S_t) dt + (a0 + a1 * S_t) dW_t
+γ is calibrated via MLE (typically 0.7–1.0 for equity indices).
+With γ = 1 this reduces to the linear-coefficient SDE used in the plan.
 
 Discretised via Euler-Maruyama at daily steps dt = T / N:
-    S_{t+1} = S_t + (b0 + b1*S_t)*dt + (a0 + a1*S_t)*sqrt(dt)*Z_t
+    S_{t+1} = S_t + (b0 + b1*S_t)*dt + (a0 + a1*S_t)^γ * sqrt(dt)*Z_t
     Z_t ~ N(0, 1)
 
 Paths are clamped to be strictly positive at each step to avoid degenerate
@@ -46,14 +46,12 @@ class GADSimulator:
     """
     Simulates GAD paths via Euler-Maruyama on a uniform time grid.
 
-    Only γ = 1 is supported (the linear-coefficient case).
+    Supports arbitrary γ ∈ (0, 1.2] as returned by MLE calibration.
     Paths are clamped below at 1e-6 at every step so that the diffusion
-    coefficient a0 + a1*S is always non-negative.
+    coefficient (a0 + a1*S)^γ is always non-negative.
     """
 
     def __init__(self, params: GADParams) -> None:
-        if params.gamma != 1.0:
-            raise ValueError("GADSimulator only supports gamma=1.0")
         self.params = params
 
     @staticmethod
@@ -66,6 +64,7 @@ class GADSimulator:
         dt = params.T / N
         b0, b1 = params.b0, params.b1
         a0, a1 = params.a0, params.a1
+        gamma = params.gamma
         sqrt_dt = np.sqrt(dt)
 
         S = np.empty((M, N + 1), dtype=np.float64)
@@ -76,7 +75,7 @@ class GADSimulator:
         for t in range(N):
             s = S[:, t]
             drift = (b0 + b1 * s) * dt
-            diff  = (a0 + a1 * s) * sqrt_dt * Z[:, t]
+            diff  = np.power(np.maximum(a0 + a1 * s, 0.0), gamma) * sqrt_dt * Z[:, t]
             S[:, t + 1] = np.maximum(s + drift + diff, 1e-6)
 
         return S

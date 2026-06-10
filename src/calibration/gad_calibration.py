@@ -1,29 +1,16 @@
 """
-GAD parameter estimation via two sequential OLS regressions.
+GAD parameter estimation — two methods.
 
 Follows He, Sutter & Gonon (2025) and Lütkebohmert–Schmidt–Sester (2022).
 γ is fixed at 1 throughout (linear-coefficient SDE).
 
----
-Model (γ = 1, Euler-Maruyama at daily steps Δt = 1/252):
-
+Model (γ = 1, Euler-Maruyama at daily steps Δt):
     ΔS_t = (b0 + b1·S_{t-1})·Δt + (a0 + a1·S_{t-1})·√Δt·Z_t
-
-Regression 1 — Drift:
-    Regressors: X = [Δt, S_{t-1}·Δt]  (column vectors)
-    Target:     y = ΔS_t
-    OLS → (b̂0, b̂1), residuals η̂_t = ΔS_t − (b̂0 + b̂1·S_{t-1})·Δt
-
-Regression 2 — Diffusion:
-    Regressors: X = [1, S_{t-1}]
-    Target:     y = |η̂_t| / √Δt    (abs. residuals scaled to per-unit-time)
-    OLS → (â0, â1)
-
-Both regressions are performed on the normalised price series (S0 = 10).
 
 Public API
 ----------
-calibrate_gad(prices, dt)          → GADParams
+calibrate_gad_mle(prices, dt)      → GADParams  [PREFERRED — matches He et al.]
+calibrate_gad(prices, dt)          → GADParams  [OLS fallback — biased drift]
 rolling_calibration(prices, window, dt) → pd.DataFrame
 """
 
@@ -35,6 +22,7 @@ from dataclasses import asdict
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 
 # Allow running from project root
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -50,6 +38,78 @@ def _ols(X: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Ordinary least-squares: returns coefficients β minimising ‖y − Xβ‖²."""
     coeffs, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
     return coeffs
+
+
+def calibrate_gad_mle(
+    prices: np.ndarray,
+    dt: float = 1 / 252,
+    S0_target: float = 10.0,
+    T: float = 30 / 252,
+    N: int = 30,
+    M: int = 100_000,
+    gamma_bounds: tuple[float, float] = (1e-6, 1.2),
+    method: str = "COBYLA",
+    max_iter: int = 1000,
+) -> GADParams:
+    """
+    Estimate GAD parameters via maximum likelihood (He et al. 2025).
+
+    Maximises the Gaussian log-likelihood of the Euler-Maruyama increments:
+
+        ΔS_t | S_{t-1} ~ N((b0+b1·S_{t-1})·Δt,  (a0+a1·S_{t-1})^{2γ}·Δt)
+
+    Operates on the normalised price series (S0 = S0_target). Directly
+    matches He et al.'s `compute_max_parameters` function (GAD_generator.ipynb).
+
+    Args:
+        prices:       1-D array of daily closing prices (raw).
+        dt:           Time step in years (default 1/252).
+        S0_target:    Normalised starting price (default 10.0).
+        T, N, M:      Simulation metadata (not used in calibration).
+        gamma_bounds: (min, max) for the elasticity γ. He et al. bound to
+                      (eps, 1.2) to prevent degenerate diffusion.
+        method:       scipy.optimize.minimize method (default COBYLA).
+        max_iter:     Maximum optimiser iterations.
+
+    Returns:
+        GADParams with MLE estimates (a0, a1, b0, b1, gamma, S0=S0_target).
+    """
+    S = _normalise(np.asarray(prices, dtype=np.float64), S0_target)
+    eps = 1e-15
+
+    def neg_log_likelihood(params: np.ndarray) -> float:
+        a0, a1, b0, b1, gamma = params
+        sigma_t = (a0 + a1 * np.maximum(S[:-1], 0.0)) ** gamma
+        mean_t  = (b0 + b1 * S[:-1]) * dt
+        var_t   = sigma_t ** 2 * dt
+        log_const = np.log(sigma_t * np.sqrt(2 * np.pi * dt) + eps)
+        sq_term   = (S[1:] - S[:-1] - mean_t) ** 2 / (2 * var_t + eps)
+        return float(np.mean(log_const + sq_term))
+
+    x0 = np.array([0.1, 0.1, 0.0, 0.0, 1.0])
+    result = minimize(
+        neg_log_likelihood,
+        x0,
+        method=method,
+        options={"maxiter": max_iter, "rhobeg": 0.01},
+        bounds=[
+            (eps, None),    # a0 > 0
+            (eps, None),    # a1 > 0
+            (None, None),   # b0 unconstrained
+            (None, None),   # b1 unconstrained
+            gamma_bounds,   # γ ∈ (eps, 1.2)
+        ],
+    )
+    a0, a1, b0, b1, gamma = result.x
+    a0    = max(float(a0), eps)
+    a1    = max(float(a1), eps)
+    gamma = float(np.clip(gamma, gamma_bounds[0], gamma_bounds[1]))
+
+    return GADParams(
+        b0=float(b0), b1=float(b1),
+        a0=a0, a1=a1, gamma=gamma,
+        S0=S0_target, T=T, N=N, M=M,
+    )
 
 
 def calibrate_gad(
@@ -120,6 +180,7 @@ def rolling_calibration(
     window: int = 250,
     dt: float = 1 / 252,
     S0_target: float = 10.0,
+    use_mle: bool = True,
 ) -> pd.DataFrame:
     """
     Compute rolling GAD estimates over a full price history.
@@ -127,25 +188,29 @@ def rolling_calibration(
     For each ending index t ∈ [window, len(prices)], fits GAD on
     prices[t-window : t].
 
+    Args:
+        use_mle: If True (default), use MLE calibration per window.
+                 Set False to use the faster OLS approximation.
+
     Returns a DataFrame with columns (b0, b1, a0, a1) and an integer index
     corresponding to the last observation in each rolling window.
-    Useful for robustness-check plots: do the FIX params lie within the
-    historical range of estimates?
     """
     prices = np.asarray(prices, dtype=np.float64)
     n = len(prices)
     records: list[dict] = []
+    cal_fn = calibrate_gad_mle if use_mle else calibrate_gad
 
     for end in range(window, n + 1):
         window_prices = prices[end - window : end]
         try:
-            p = calibrate_gad(window_prices, dt=dt, S0_target=S0_target)
+            p = cal_fn(window_prices, dt=dt, S0_target=S0_target)
             records.append({
                 "end_idx": end - 1,
                 "b0": p.b0,
                 "b1": p.b1,
                 "a0": p.a0,
                 "a1": p.a1,
+                "gamma": p.gamma,
             })
         except Exception:
             continue
